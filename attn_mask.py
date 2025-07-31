@@ -1,5 +1,8 @@
 # Modified from https://github.com/mit-han-lab/radial-attention/blob/1fd0dbacc2074a0d90e78ee2a59f214839a9cbb9/radial_attn/attn_mask.py
 
+import functools
+from dataclasses import dataclass
+
 import flashinfer
 import torch
 from einops import rearrange, repeat
@@ -75,30 +78,28 @@ def pad_qkv(input_tensor, block_size=128):
     # Calculate the necessary padding
     padding_length = (block_size - (seqlen % block_size)) % block_size
     # Create a padded tensor with zeros
-    padded_tensor = torch.zeros(
-        (seqlen + padding_length, num_heads, hidden_dim), device=input_tensor.device, dtype=input_tensor.dtype
-    )
+    padded_tensor = torch.zeros((seqlen + padding_length, num_heads, hidden_dim), device=input_tensor.device, dtype=input_tensor.dtype)
     # Copy the original tensor into the padded tensor
     padded_tensor[:seqlen, :, :] = input_tensor
 
     return padded_tensor
 
 
-def get_diagonal_split_mask(i, j, token_per_frame, sparse_type, query):
+def get_diagonal_split_mask(i, j, token_per_frame, sparse_type, device):
     assert sparse_type in ["radial"]
     dist = abs(i - j)
     group = dist.bit_length()
     threshold = 128  # hardcoded threshold for now, which is equal to block-size
     decay_length = 2 ** token_per_frame.bit_length() / 2**group
     if decay_length >= threshold:
-        return torch.ones((token_per_frame, token_per_frame), device=query.device, dtype=torch.bool)
+        return torch.ones((token_per_frame, token_per_frame), device=device, dtype=torch.bool)
 
     split_factor = int(threshold / decay_length)
     modular = dist % split_factor
     if modular == 0:
-        return torch.ones((token_per_frame, token_per_frame), device=query.device, dtype=torch.bool)
+        return torch.ones((token_per_frame, token_per_frame), device=device, dtype=torch.bool)
     else:
-        return torch.zeros((token_per_frame, token_per_frame), device=query.device, dtype=torch.bool)
+        return torch.zeros((token_per_frame, token_per_frame), device=device, dtype=torch.bool)
 
 
 def get_window_width(i, j, token_per_frame, sparse_type, num_frame, decay_factor=1, block_size=128, model_type=None):
@@ -123,26 +124,25 @@ def get_window_width(i, j, token_per_frame, sparse_type, num_frame, decay_factor
         return threshold
 
 
-def gen_log_mask_shrinked(
-    query, s, video_token_num, num_frame, block_size=128, sparse_type="log", decay_factor=0.5, model_type=None
-):
+def gen_log_mask_shrinked(shape, device, video_token_num, num_frame, block_size=128, sparse_type="log", decay_factor=0.5, model_type=None):
     """
     A more memory friendly version, we generate the attention mask of each frame pair at a time,
     shrinks it, and stores it into the final result
     """
-    final_log_mask = torch.zeros((s // block_size, s // block_size), device=query.device, dtype=torch.bool)
+    s = shape[0]
+    final_log_mask = torch.zeros((s // block_size, s // block_size), device=device, dtype=torch.bool)
     token_per_frame = video_token_num // num_frame
     video_text_border = video_token_num // block_size
 
-    col_indices = torch.arange(0, token_per_frame, device=query.device).view(1, -1)
-    row_indices = torch.arange(0, token_per_frame, device=query.device).view(-1, 1)
+    col_indices = torch.arange(0, token_per_frame, device=device).view(1, -1)
+    row_indices = torch.arange(0, token_per_frame, device=device).view(-1, 1)
     final_log_mask[video_text_border:] = True
     final_log_mask[:, video_text_border:] = True
     for i in range(num_frame):
         for j in range(num_frame):
-            local_mask = torch.zeros((token_per_frame, token_per_frame), device=query.device, dtype=torch.bool)
+            local_mask = torch.zeros((token_per_frame, token_per_frame), device=device, dtype=torch.bool)
             if j == 0 and model_type == "wan":  # this is attention sink
-                local_mask = torch.ones((token_per_frame, token_per_frame), device=query.device, dtype=torch.bool)
+                local_mask = torch.ones((token_per_frame, token_per_frame), device=device, dtype=torch.bool)
             else:
                 window_width = get_window_width(
                     i,
@@ -155,7 +155,7 @@ def gen_log_mask_shrinked(
                     model_type=model_type,
                 )
                 local_mask = torch.abs(col_indices - row_indices) <= window_width
-                split_mask = get_diagonal_split_mask(i, j, token_per_frame, sparse_type, query)
+                split_mask = get_diagonal_split_mask(i, j, token_per_frame, sparse_type, device)
                 local_mask = torch.logical_and(local_mask, split_mask)
 
             remainder_row = (i * token_per_frame) % block_size
@@ -163,10 +163,8 @@ def gen_log_mask_shrinked(
             # get the padded size
             all_length_row = remainder_row + ((token_per_frame - 1) // block_size + 1) * block_size
             all_length_col = remainder_col + ((token_per_frame - 1) // block_size + 1) * block_size
-            padded_local_mask = torch.zeros((all_length_row, all_length_col), device=query.device, dtype=torch.bool)
-            padded_local_mask[
-                remainder_row : remainder_row + token_per_frame, remainder_col : remainder_col + token_per_frame
-            ] = local_mask
+            padded_local_mask = torch.zeros((all_length_row, all_length_col), device=device, dtype=torch.bool)
+            padded_local_mask[remainder_row : remainder_row + token_per_frame, remainder_col : remainder_col + token_per_frame] = local_mask
             # shrink the mask
             block_mask = shrinkMaskStrict(padded_local_mask, block_size=block_size)
             # set the block mask to the final log mask
@@ -181,30 +179,27 @@ def gen_log_mask_shrinked(
     return final_log_mask
 
 
+@dataclass
 class MaskMap:
-    _log_mask = None
+    video_token_num: int
+    num_frame: int
 
-    def __init__(self, video_token_num=25440, num_frame=16):
-        self.video_token_num = video_token_num
-        self.num_frame = num_frame
 
-    def queryLogMask(self, query, sparse_type, block_size=128, decay_factor=0.5, model_type=None):
-        if MaskMap._log_mask is None:
-            MaskMap._log_mask = torch.ones(
-                (query.shape[0] // block_size, query.shape[0] // block_size), device=query.device, dtype=torch.bool
-            )
-            block_bound = self.video_token_num // block_size
-            MaskMap._log_mask[:block_bound, :block_bound] = gen_log_mask_shrinked(
-                query,
-                query.shape[0],
-                self.video_token_num,
-                self.num_frame,
-                sparse_type=sparse_type,
-                decay_factor=decay_factor,
-                model_type=model_type,
-                block_size=block_size,
-            )
-        return MaskMap._log_mask
+@functools.cache
+def queryLogMask(video_token_num, num_frame, shape, device, sparse_type, block_size=128, decay_factor=0.5, model_type=None):
+    log_mask = torch.ones((shape[0] // block_size, shape[0] // block_size), device=device, dtype=torch.bool)
+    block_bound = video_token_num // block_size
+    log_mask[:block_bound, :block_bound] = gen_log_mask_shrinked(
+        shape,
+        device,
+        video_token_num,
+        num_frame,
+        sparse_type=sparse_type,
+        decay_factor=decay_factor,
+        model_type=model_type,
+        block_size=block_size,
+    )
+    return log_mask
 
 
 def SpargeSageAttnBackend(query, key, value, mask_map=None, video_mask=None, pre_defined_mask=None, block_size=128):
@@ -302,9 +297,7 @@ def FlashInferBackend(query, key, value, mask_map=None, pre_defined_mask=None, b
         )
 
         # merge the two results
-        o_video, _ = flashinfer.merge_state(
-            v_a=video_video_o, s_a=video_video_o_lse, v_b=video_text_o, s_b=video_text_o_lse
-        )
+        o_video, _ = flashinfer.merge_state(v_a=video_video_o, s_a=video_video_o_lse, v_b=video_text_o, s_b=video_text_o_lse)
 
         o_text = flashinfer.single_prefill_with_kv_cache(
             q=query[mask_map.video_token_num :, :, :],
@@ -346,13 +339,12 @@ def RadialAttention(
             dtype=torch.bool,
         )
     else:
-        video_mask = (
-            mask_map.queryLogMask(
-                query, sparsity_type, block_size=block_size, decay_factor=decay_factor, model_type=model_type
+        if mask_map is not None:
+            video_mask = queryLogMask(
+                mask_map.video_token_num, mask_map.num_frame, query.shape, query.device, sparsity_type, block_size=block_size, decay_factor=decay_factor, model_type=model_type
             )
-            if mask_map
-            else None
-        )
+        else:
+            video_mask = None
 
     backend = "sparse_sageattn" if use_sage_attention else "flashinfer"
 
