@@ -2,7 +2,7 @@
 
 This repo is [RadialAttention](https://github.com/mit-han-lab/radial-attention) ported to ComfyUI native workflows. If you're using kijai's [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) rather than native workflows, then you can use their `WanVideoSetRadialAttention` node rather than this repo, and you still need to install the pip packages below.
 
-This supports Wan 2.1 and 2.2 14B, both T2V and I2V.
+This supports Wan 2.1 14B, Wan 2.2 14B, Wan 2.2 5B, both T2V and I2V.
 
 ## Installation
 
@@ -17,6 +17,9 @@ Just connect your model to the `PatchRadialAttn` node. There's an [example workf
 
 It's believed that skipping RadialAttention on the first layer (`dense_block = 1`) and the first time step (`dense_timestep = 1`) improves the quality.
 
-RadialAttention requires specific video sizes and lengths. The 'number of video tokens' must be divisible by 128. For Wan 14B, this number is computed by `width/16 * height/16 * (length+3)/4`. See [video_token_num](https://github.com/woct0rdho/ComfyUI-RadialAttn/blob/14ed41e2ef754dfd0fb7d0ea4eea5ed2293edb55/nodes.py#L180) for details.
+RadialAttention requires specific video sizes and lengths:
+* The 'number of video tokens' must be divisible by 128, see [video_token_num](https://github.com/woct0rdho/ComfyUI-RadialAttn/blob/14ed41e2ef754dfd0fb7d0ea4eea5ed2293edb55/nodes.py#L180) for details
+* For Wan 2.1 and 2.2 14B, this number is computed by `width/16 * height/16 * (length+3)/4`
+* For Wan 2.2 5B, this number is computed by `width/32 * height/32 * (length+3)/4`
 
 (A misunderstanding is that the width and the height must be divisible by 128, but that's actually not the case.)
