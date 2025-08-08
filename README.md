@@ -23,3 +23,5 @@ RadialAttention requires specific video sizes and lengths:
 * For Wan 2.2 5B, this number is computed by `width/32 * height/32 * (length+3)/4`
 
 (A misunderstanding is that the width and the height must be divisible by 128, but that's actually not the case.)
+
+Don't blindly use `torch.compile`. To start with, you can disable the `TorchCompileModel` node and run the workflow. Only when you're sure that the workflow runs but it's not fast enough, then you can try to enable `TorchCompileModel`. There are reports that `torch.compile` is slower in PyTorch 2.8 .
