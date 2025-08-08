@@ -9,7 +9,7 @@ This supports Wan 2.1 14B, Wan 2.2 14B, Wan 2.2 5B, both T2V and I2V.
 1. Install [SpargeAttention](https://github.com/woct0rdho/SpargeAttn/releases)
 2. git clone this repo to your `ComfyUI/custom_nodes/`
 
-It's also recommended to install [SageAttention](https://github.com/woct0rdho/SageAttention/releases). When RadialAttention is not applicable, SageAttention will be used.
+It's also recommended to install [SageAttention](https://github.com/woct0rdho/SageAttention/releases), and add `--use-sage-attention` when starting ComfyUI. When RadialAttention is not applicable, SageAttention will be used.
 
 ## Usage
 
