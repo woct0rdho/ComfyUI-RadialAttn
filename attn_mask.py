@@ -14,17 +14,34 @@ except ImportError:
     from sparse_sageattn import sparse_sageattn as block_sparse_sage2_attn_cuda
 
 
-def sparge_mask_convert(mask: torch.Tensor, block_size: int = 128) -> torch.Tensor:
+@functools.cache
+def get_cuda_arch_versions():
+    cuda_archs = []
+    for i in range(torch.cuda.device_count()):
+        major, minor = torch.cuda.get_device_capability(i)
+        cuda_archs.append(f"sm{major}{minor}")
+    return cuda_archs
+
+
+def sparge_mask_convert(mask: torch.Tensor, block_size: int = 128, arch="sm") -> torch.Tensor:
     assert block_size in [128, 64], "Radial Attention only supports block size of 128 or 64"
     assert mask.shape[0] == mask.shape[1], "Input mask must be square."
 
     if block_size == 128:
-        new_mask = torch.repeat_interleave(mask, 2, dim=1)
+        if arch == "sm90":
+            new_mask = torch.repeat_interleave(mask, 2, dim=0)
+        else:
+            new_mask = torch.repeat_interleave(mask, 2, dim=1)
 
     elif block_size == 64:
-        num_row, num_col = mask.shape
-        reshaped_mask = mask.view(num_row // 2, 2, num_col)
-        new_mask = torch.max(reshaped_mask, dim=1).values
+        if arch == "sm90":
+            num_row, num_col = mask.shape
+            reshaped_mask = mask.view(num_row, num_col // 2, 2)
+            new_mask = torch.max(reshaped_mask, dim=2).values
+        else:
+            num_row, num_col = mask.shape
+            reshaped_mask = mask.view(num_row // 2, 2, num_col)
+            new_mask = torch.max(reshaped_mask, dim=1).values
 
     return new_mask
 
@@ -185,9 +202,7 @@ class MaskMap:
 
 @functools.cache
 def queryLogMask(video_token_num, num_frame, shape, device, sparse_type, block_size=128, decay_factor=0.5, model_type=None):
-    log_mask = torch.ones((shape[0] // block_size, shape[0] // block_size), device=device, dtype=torch.bool)
-    block_bound = video_token_num // block_size
-    log_mask[:block_bound, :block_bound] = gen_log_mask_shrinked(
+    return gen_log_mask_shrinked(
         shape,
         device,
         video_token_num,
@@ -197,7 +212,6 @@ def queryLogMask(video_token_num, num_frame, shape, device, sparse_type, block_s
         model_type=model_type,
         block_size=block_size,
     )
-    return log_mask
 
 
 def SpargeSageAttnBackend(query, key, value, mask_map=None, video_mask=None, pre_defined_mask=None, block_size=128):
@@ -205,8 +219,9 @@ def SpargeSageAttnBackend(query, key, value, mask_map=None, video_mask=None, pre
     query_hnd = rearrange(query.unsqueeze(0), "b s h d -> b h s d")
     key_hnd = rearrange(key.unsqueeze(0), "b s h d -> b h s d")
     value_hnd = rearrange(value.unsqueeze(0), "b s h d -> b h s d")
+    arch = get_cuda_arch_versions()[query.device.index]
     converted_mask = repeat(
-        sparge_mask_convert(mask=video_mask, block_size=block_size),
+        sparge_mask_convert(mask=video_mask, block_size=block_size, arch=arch),
         "s t -> b h s t",
         b=query_hnd.shape[0],
         h=query_hnd.shape[1],
