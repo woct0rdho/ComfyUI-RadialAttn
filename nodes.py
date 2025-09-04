@@ -19,7 +19,7 @@ if not _initialized:
 def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
     mask_map = MaskMap(video_token_num, num_frame)
 
-    # @torch.compiler.disable()
+    @torch.compiler.disable()
     def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
         # attn_precision is unused
         assert mask is None
