@@ -15,7 +15,7 @@ It's also recommended to install [SageAttention](https://github.com/woct0rdho/Sa
 
 Just connect your model to the `PatchRadialAttn` node. There's an [example workflow](https://github.com/woct0rdho/ComfyUI-RadialAttn/blob/main/example_workflows/radial_attn.json) for Wan 2.2 14B I2V + GGUF + LightX2V LoRA + RadialAttention + `torch.compile`.
 
-It's believed that skipping RadialAttention on the first layer (`dense_block = 1`) and the first time step (`dense_timestep = 1`) improves the quality.
+It's believed that disabling RadialAttention on the first layer (`dense_block = 1`), the first time step (`dense_timestep = 1`), and the last time step (`last_dense_timestep = 1`) improves the quality.
 
 RadialAttention requires specific video sizes and lengths:
 * The 'number of video tokens' must be divisible by 128, see [video_token_num](https://github.com/woct0rdho/ComfyUI-RadialAttn/blob/14ed41e2ef754dfd0fb7d0ea4eea5ed2293edb55/nodes.py#L180) for details

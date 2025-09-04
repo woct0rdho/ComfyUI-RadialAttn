@@ -4,6 +4,7 @@ from unittest.mock import patch
 import comfy
 import torch
 from comfy.ldm.wan.model import WanModel, sinusoidal_embedding_1d
+from tqdm import tqdm
 
 from .attn_mask import MaskMap, RadialAttention
 
@@ -18,7 +19,7 @@ if not _initialized:
 def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
     mask_map = MaskMap(video_token_num, num_frame)
 
-    @torch.compiler.disable()
+    # @torch.compiler.disable()
     def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
         # attn_precision is unused
         assert mask is None
@@ -92,12 +93,12 @@ def _WanModel_forward_orig(
     blocks_replace = patches_replace.get("dit", {})
 
     # Unapply before the 0-th layer in case it's not unapplied because of interrupt previously
-    print("Unapply radial attn")
+    tqdm.write("Unapply radial attn")
     comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
 
     for i, block in enumerate(self.blocks):
         if i == ra_options["dense_block"]:
-            print("Apply radial attn from layer", i)
+            tqdm.write(f"Apply radial attn from layer {i}")
             comfy.ldm.wan.model.optimized_attention = ra_options["radial_attn_func"]
 
         if ("double_block", i) in blocks_replace:
@@ -112,7 +113,7 @@ def _WanModel_forward_orig(
         else:
             x = block(x, e=e0, freqs=freqs, context=context, context_img_len=context_img_len)
 
-    print("Unapply radial attn")
+    tqdm.write("Unapply radial attn")
     comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
 
     # head
@@ -129,8 +130,9 @@ class PatchRadialAttn:
         return {
             "required": {
                 "model": ("MODEL",),
-                "dense_block": ("INT", {"default": 1, "min": 0, "max": 40, "step": 1, "tooltip": "Apply radial attn from which layer."}),
-                "dense_timestep": ("INT", {"default": 2, "min": 0, "max": 100, "step": 1, "tooltip": "Apply radial attn from which timestep."}),
+                "dense_block": ("INT", {"default": 1, "min": 0, "max": 40, "step": 1, "tooltip": "Number of the first few blocks to disable radial attn."}),
+                "dense_timestep": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "Number of the first few time steps to disable radial attn."}),
+                "last_dense_timestep": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "Number of the last few time steps to disable radial attn."}),
                 "block_size": ([64, 128], {"default": 128}),
                 "decay_factor": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.1, "tooltip": "Lower is faster, higher is more accurate."}),
             }
@@ -140,7 +142,7 @@ class PatchRadialAttn:
     FUNCTION = "patch_radial_attn"
     CATEGORY = "RadialAttn"
 
-    def patch_radial_attn(self, model, dense_block, dense_timestep, block_size, decay_factor):
+    def patch_radial_attn(self, model, dense_block, dense_timestep, last_dense_timestep, block_size, decay_factor):
         model = model.clone()
 
         diffusion_model = model.get_model_object("diffusion_model")
@@ -155,6 +157,7 @@ class PatchRadialAttn:
         ra_options["patch_size"] = diffusion_model.patch_size
         ra_options["dense_block"] = dense_block
         ra_options["dense_timestep"] = dense_timestep
+        ra_options["last_dense_timestep"] = last_dense_timestep
         ra_options["block_size"] = block_size
         ra_options["decay_factor"] = decay_factor
 
@@ -166,12 +169,17 @@ class PatchRadialAttn:
             c = kwargs["c"]
             sigmas = c["transformer_options"]["sample_sigmas"]
 
-            current_step_index = 0
-            for i in range(len(sigmas) - 1):
-                # walk from beginning of steps until crossing the timestep
-                if (sigmas[i] - timestep[0]) * (sigmas[i + 1] - timestep[0]) <= 0:
-                    current_step_index = i
-                    break
+            matched_step_index = (sigmas == timestep).nonzero()
+            if len(matched_step_index) > 0:
+                current_step_index = matched_step_index.item()
+            else:
+                for i in range(len(sigmas) - 1):
+                    # walk from beginning of steps until crossing the timestep
+                    if (sigmas[i] - timestep[0]) * (sigmas[i + 1] - timestep[0]) <= 0:
+                        current_step_index = i
+                        break
+                else:
+                    current_step_index = 0
 
             ra_options = c["transformer_options"]["radial_attn"]
             patch_size = ra_options["patch_size"]
@@ -181,7 +189,7 @@ class PatchRadialAttn:
 
             ra_options["radial_attn_func"] = get_radial_attn_func(video_token_num, num_frame, ra_options["block_size"], ra_options["decay_factor"])
 
-            if current_step_index >= ra_options["dense_timestep"]:
+            if ra_options["dense_timestep"] <= current_step_index < len(sigmas) - 1 - ra_options["last_dense_timestep"]:
                 with context:
                     return model_function(input, timestep, **c)
             else:

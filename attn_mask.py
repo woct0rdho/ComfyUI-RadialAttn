@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 import torch
 from einops import rearrange, repeat
+from tqdm import tqdm
 
 # try to import block_sparse_sage2_attn_cuda from spas_sage_attn, if it fails, use the one from sparse_sageattn
 try:
@@ -190,7 +191,7 @@ def gen_log_mask_shrinked(shape, device, video_token_num, num_frame, block_size=
             final_log_mask[block_row_start:block_row_end, block_col_start:block_col_end] = torch.logical_or(
                 final_log_mask[block_row_start:block_row_end, block_col_start:block_col_end], block_mask
             )
-    print(f"mask sparsity: {1 - final_log_mask.sum() / final_log_mask.numel()}")
+    tqdm.write(f"mask sparsity: {1 - final_log_mask.sum() / final_log_mask.numel()}")
     return final_log_mask
 
 
