@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import comfy
 import torch
+from comfy.ldm.modules.attention import wrap_attn
 from comfy.ldm.wan.model import WanModel, sinusoidal_embedding_1d
 from tqdm import tqdm
 
@@ -20,7 +21,8 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
     mask_map = MaskMap(video_token_num, num_frame)
 
     @torch.compiler.disable()
-    def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False):
+    @wrap_attn
+    def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False, **kwargs):
         # attn_precision is unused
         assert mask is None
         assert skip_reshape is False
