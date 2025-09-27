@@ -212,7 +212,13 @@ def _AnimateWanModel_forward_orig(
             x = block(x, e=e0, freqs=freqs, context=context, context_img_len=context_img_len, transformer_options=transformer_options)
 
         if i % 5 == 0 and motion_vec is not None:
+            # Disable radial_attn on face_adapter
+            _optimized_attention = comfy.ldm.wan.model.optimized_attention
+            _optimized_attention = _original_functions.get("orig_attention")
+
             x = x + self.face_adapter.fuser_blocks[i // 5](x, motion_vec)
+
+            comfy.ldm.wan.model.optimized_attention = _optimized_attention
 
     tqdm.write("Unapply radial attn")
     comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
