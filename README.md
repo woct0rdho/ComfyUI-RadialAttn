@@ -2,7 +2,7 @@
 
 This repo is [RadialAttention](https://github.com/mit-han-lab/radial-attention) ported to ComfyUI native workflows. If you're using kijai's [ComfyUI-WanVideoWrapper](https://github.com/kijai/ComfyUI-WanVideoWrapper) rather than native workflows, then you can use their `WanVideoSetRadialAttention` node rather than this repo, and you still need to install the pip packages below.
 
-This supports Wan 2.1 14B, Wan 2.2 14B, Wan 2.2 5B, both T2V and I2V. This does not give speedup if you only generate a single frame image.
+This supports Wan 2.1 14B, Wan 2.2 14B, Wan 2.2 5B, Wan 2.2 Animate, both T2V and I2V. This does not give speedup if you only generate a single frame image.
 
 ## Installation
 
