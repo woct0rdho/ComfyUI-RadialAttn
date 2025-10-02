@@ -1,20 +1,11 @@
 import functools
 from unittest.mock import patch
 
-import comfy
 import torch
 from comfy.ldm.modules.attention import wrap_attn
-from comfy.ldm.wan.model import WanModel, sinusoidal_embedding_1d
-from comfy.ldm.wan.model_animate import AnimateWanModel
-from tqdm import tqdm
 
 from .attn_mask import MaskMap, RadialAttention
-
-_initialized = False
-_original_functions = {}
-if not _initialized:
-    _original_functions["orig_attention"] = comfy.ldm.modules.attention.optimized_attention
-    _initialized = True
+from .patches import _original_functions, patched_forward
 
 
 @functools.cache
@@ -60,180 +51,6 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
     return radial_attn_func
 
 
-def _WanModel_forward_orig(
-    self,
-    x,
-    t,
-    context,
-    clip_fea=None,
-    freqs=None,
-    transformer_options={},
-    **kwargs,
-):
-    ra_options = transformer_options["radial_attn"]
-
-    # embeddings
-    x = self.patch_embedding(x.float()).to(x.dtype)
-    grid_sizes = x.shape[2:]
-    x = x.flatten(2).transpose(1, 2)
-
-    # time embeddings
-    e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(dtype=x[0].dtype))
-    e = e.reshape(t.shape[0], -1, e.shape[-1])
-    e0 = self.time_projection(e).unflatten(2, (6, self.dim))
-
-    full_ref = None
-    if self.ref_conv is not None:
-        full_ref = kwargs.get("reference_latent", None)
-        if full_ref is not None:
-            full_ref = self.ref_conv(full_ref).flatten(2).transpose(1, 2)
-            x = torch.concat((full_ref, x), dim=1)
-
-    # context
-    context = self.text_embedding(context)
-
-    context_img_len = None
-    if clip_fea is not None:
-        if self.img_emb is not None:
-            context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
-            context = torch.concat([context_clip, context], dim=1)
-        context_img_len = clip_fea.shape[-2]
-
-    patches_replace = transformer_options.get("patches_replace", {})
-    blocks_replace = patches_replace.get("dit", {})
-
-    # Unapply before the 0-th layer in case it's not unapplied because of interrupt previously
-    tqdm.write("Unapply radial attn")
-    comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
-
-    for i, block in enumerate(self.blocks):
-        if i == ra_options["dense_block"]:
-            tqdm.write(f"Apply radial attn from layer {i}")
-            comfy.ldm.wan.model.optimized_attention = ra_options["radial_attn_func"]
-
-        if ("double_block", i) in blocks_replace:
-
-            def block_wrap(args):
-                out = {}
-                out["img"] = block(
-                    args["img"], context=args["txt"], e=args["vec"], freqs=args["pe"], context_img_len=context_img_len, transformer_options=args["transformer_options"]
-                )
-                return out
-
-            out = blocks_replace[("double_block", i)](
-                {"img": x, "txt": context, "vec": e0, "pe": freqs, "transformer_options": transformer_options}, {"original_block": block_wrap}
-            )
-            x = out["img"]
-        else:
-            x = block(x, e=e0, freqs=freqs, context=context, context_img_len=context_img_len, transformer_options=transformer_options)
-
-    tqdm.write("Unapply radial attn")
-    comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
-
-    # head
-    x = self.head(x, e)
-
-    if full_ref is not None:
-        x = x[:, full_ref.shape[1] :]
-
-    # unpatchify
-    x = self.unpatchify(x, grid_sizes)
-    return x
-
-
-def _AnimateWanModel_forward_orig(
-    self,
-    x,
-    t,
-    context,
-    clip_fea=None,
-    pose_latents=None,
-    face_pixel_values=None,
-    freqs=None,
-    transformer_options={},
-    **kwargs,
-):
-    ra_options = transformer_options["radial_attn"]
-
-    # embeddings
-    x = self.patch_embedding(x.float()).to(x.dtype)
-    x, motion_vec = self.after_patch_embedding(x, pose_latents, face_pixel_values)
-    grid_sizes = x.shape[2:]
-    x = x.flatten(2).transpose(1, 2)
-
-    # time embeddings
-    e = self.time_embedding(sinusoidal_embedding_1d(self.freq_dim, t.flatten()).to(dtype=x[0].dtype))
-    e = e.reshape(t.shape[0], -1, e.shape[-1])
-    e0 = self.time_projection(e).unflatten(2, (6, self.dim))
-
-    full_ref = None
-    if self.ref_conv is not None:
-        full_ref = kwargs.get("reference_latent", None)
-        if full_ref is not None:
-            full_ref = self.ref_conv(full_ref).flatten(2).transpose(1, 2)
-            x = torch.concat((full_ref, x), dim=1)
-
-    # context
-    context = self.text_embedding(context)
-
-    context_img_len = None
-    if clip_fea is not None:
-        if self.img_emb is not None:
-            context_clip = self.img_emb(clip_fea)  # bs x 257 x dim
-            context = torch.concat([context_clip, context], dim=1)
-        context_img_len = clip_fea.shape[-2]
-
-    patches_replace = transformer_options.get("patches_replace", {})
-    blocks_replace = patches_replace.get("dit", {})
-
-    # Unapply before the 0-th layer in case it's not unapplied because of interrupt previously
-    tqdm.write("Unapply radial attn")
-    comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
-
-    for i, block in enumerate(self.blocks):
-        if i == ra_options["dense_block"]:
-            tqdm.write(f"Apply radial attn from layer {i}")
-            comfy.ldm.wan.model.optimized_attention = ra_options["radial_attn_func"]
-
-        if ("double_block", i) in blocks_replace:
-
-            def block_wrap(args):
-                out = {}
-                out["img"] = block(
-                    args["img"], context=args["txt"], e=args["vec"], freqs=args["pe"], context_img_len=context_img_len, transformer_options=args["transformer_options"]
-                )
-                return out
-
-            out = blocks_replace[("double_block", i)](
-                {"img": x, "txt": context, "vec": e0, "pe": freqs, "transformer_options": transformer_options}, {"original_block": block_wrap}
-            )
-            x = out["img"]
-        else:
-            x = block(x, e=e0, freqs=freqs, context=context, context_img_len=context_img_len, transformer_options=transformer_options)
-
-        if i % 5 == 0 and motion_vec is not None:
-            # Disable radial_attn on face_adapter
-            _optimized_attention = comfy.ldm.wan.model.optimized_attention
-            _optimized_attention = _original_functions.get("orig_attention")
-
-            x = x + self.face_adapter.fuser_blocks[i // 5](x, motion_vec)
-
-            comfy.ldm.wan.model.optimized_attention = _optimized_attention
-
-    tqdm.write("Unapply radial attn")
-    comfy.ldm.wan.model.optimized_attention = _original_functions.get("orig_attention")
-
-    # head
-    x = self.head(x, e)
-
-    if full_ref is not None:
-        x = x[:, full_ref.shape[1] :]
-
-    # unpatchify
-    x = self.unpatchify(x, grid_sizes)
-    return x
-
-
 class PatchRadialAttn:
     @classmethod
     def INPUT_TYPES(s):
@@ -270,12 +87,11 @@ class PatchRadialAttn:
         ra_options["block_size"] = block_size
         ra_options["decay_factor"] = decay_factor
 
-        if type(diffusion_model) is WanModel:
-            context = patch.multiple(diffusion_model, forward_orig=_WanModel_forward_orig.__get__(diffusion_model, diffusion_model.__class__))
-        elif type(diffusion_model) is AnimateWanModel:
-            context = patch.multiple(diffusion_model, forward_orig=_AnimateWanModel_forward_orig.__get__(diffusion_model, diffusion_model.__class__))
+        type_name = type(diffusion_model).__name__
+        if type_name in patched_forward:
+            context = patch.multiple(diffusion_model, forward_orig=patched_forward[type_name].__get__(diffusion_model, diffusion_model.__class__))
         else:
-            raise TypeError(f"Unsupported model: {type(diffusion_model)}")
+            raise TypeError(f"Unsupported model: {type_name}")
 
         def unet_wrapper_function(model_function, kwargs):
             input = kwargs["input"]
