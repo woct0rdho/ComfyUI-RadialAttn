@@ -9,7 +9,7 @@ This does not give speedup if you only generate a single frame image.
 ## Installation
 
 1. Install [SpargeAttention](https://github.com/woct0rdho/SpargeAttn)
-2. git clone this repo to your `ComfyUI/custom_nodes/`
+2. git clone ComfyUI-RadialAttn to your `ComfyUI/custom_nodes/`
 
 It's also recommended to install [SageAttention](https://github.com/woct0rdho/SageAttention), and add `--use-sage-attention` when starting ComfyUI. When RadialAttention is not applicable, SageAttention will be used.
 
