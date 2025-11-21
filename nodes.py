@@ -26,9 +26,21 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
             return orig_attention(q, k, v, heads)
 
         # (batch_size, seq_len, num_heads * head_dim) -> (batch_size * seq_len, num_heads, head_dim)
-        b, _, head_dim = q.shape
-        head_dim //= heads
+        b, orig_seq_len, head_dim_total = q.shape
+        head_dim = head_dim_total // heads
         q, k, v = map(lambda t: t.view(-1, heads, head_dim), (q, k, v))
+
+        padded_len = b * video_token_num
+        if q.shape[0] != padded_len:
+            def pad_tensor(tensor):
+                if tensor.shape[0] == padded_len:
+                    return tensor
+                padding = torch.zeros(padded_len - tensor.shape[0], tensor.shape[1], tensor.shape[2], device=tensor.device, dtype=tensor.dtype)
+                return torch.cat([tensor, padding], dim=0)
+
+            q = pad_tensor(q)
+            k = pad_tensor(k)
+            v = pad_tensor(v)
 
         out = RadialAttention(
             q,
@@ -42,6 +54,8 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
             pre_defined_mask=None,
             use_sage_attention=True,
         )
+
+        out = out[: b * orig_seq_len, :, :]
 
         # (batch_size * seq_len, num_heads, head_dim) -> (batch_size, seq_len, num_heads * head_dim)
         # Cannot use view because out may not be contiguous
@@ -117,7 +131,11 @@ class PatchRadialAttn:
             frame_size = (input.shape[3] // patch_size[1]) * (input.shape[4] // patch_size[2])
             video_token_num = frame_size * num_frame
 
-            ra_options["radial_attn_func"] = get_radial_attn_func(video_token_num, num_frame, ra_options["block_size"], ra_options["decay_factor"])
+            padded_video_token_num = video_token_num
+            if video_token_num % block_size != 0:
+                padded_video_token_num = (video_token_num // block_size + 1) * block_size
+
+            ra_options["radial_attn_func"] = get_radial_attn_func(padded_video_token_num, num_frame, ra_options["block_size"], ra_options["decay_factor"])
 
             if ra_options["dense_timestep"] <= current_step_index < len(sigmas) - 1 - ra_options["last_dense_timestep"]:
                 with context:
