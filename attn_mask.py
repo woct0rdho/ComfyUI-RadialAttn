@@ -15,7 +15,6 @@ except ImportError:
     from sparse_sageattn import sparse_sageattn as block_sparse_sage2_attn_cuda
 
 
-@functools.cache
 def get_cuda_arch_versions():
     cuda_archs = []
     for i in range(torch.cuda.device_count()):
@@ -24,7 +23,11 @@ def get_cuda_arch_versions():
     return cuda_archs
 
 
-def sparge_mask_convert(mask: torch.Tensor, block_size: int = 128, arch="sm") -> torch.Tensor:
+# Currently get_cuda_arch_versions cannot be traced by torch.compile
+_cuda_archs = get_cuda_arch_versions()
+
+
+def sparge_mask_convert(mask: torch.Tensor, block_size: int = 128, arch: str = "sm80") -> torch.Tensor:
     assert block_size in [128, 64], "Radial Attention only supports block size of 128 or 64"
     assert mask.shape[0] == mask.shape[1], "Input mask must be square."
 
@@ -181,7 +184,7 @@ def SpargeSageAttnBackend(query, key, value, mask_map=None, video_mask=None, pre
     query_hnd = rearrange(query.unsqueeze(0), "b s h d -> b h s d")
     key_hnd = rearrange(key.unsqueeze(0), "b s h d -> b h s d")
     value_hnd = rearrange(value.unsqueeze(0), "b s h d -> b h s d")
-    arch = get_cuda_arch_versions()[query.device.index]
+    arch = _cuda_archs[query.device.index]
     converted_mask = repeat(
         sparge_mask_convert(mask=video_mask, block_size=block_size, arch=arch),
         "s t -> b h s t",
