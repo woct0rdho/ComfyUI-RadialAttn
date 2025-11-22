@@ -26,21 +26,18 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
             return orig_attention(q, k, v, heads)
 
         # (batch_size, seq_len, num_heads * head_dim) -> (batch_size * seq_len, num_heads, head_dim)
-        b, orig_seq_len, head_dim_total = q.shape
-        head_dim = head_dim_total // heads
+        b, orig_seq_len, head_dim = q.shape
+        head_dim //= heads
         q, k, v = map(lambda t: t.view(-1, heads, head_dim), (q, k, v))
 
         padded_len = b * video_token_num
         if q.shape[0] != padded_len:
+
             def pad_tensor(tensor):
-                if tensor.shape[0] == padded_len:
-                    return tensor
                 padding = torch.zeros(padded_len - tensor.shape[0], tensor.shape[1], tensor.shape[2], device=tensor.device, dtype=tensor.dtype)
                 return torch.cat([tensor, padding], dim=0)
 
-            q = pad_tensor(q)
-            k = pad_tensor(k)
-            v = pad_tensor(v)
+            q, k, v = map(pad_tensor, (q, k, v))
 
         out = RadialAttention(
             q,
