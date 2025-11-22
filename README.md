@@ -19,11 +19,4 @@ Just connect your model to the `PatchRadialAttn` node. There's an [example workf
 
 It's believed that disabling RadialAttention on the first layer (`dense_block = 1`), the first time step (`dense_timestep = 1`), and the last time step (`last_dense_timestep = 1`) improves the quality.
 
-RadialAttention requires specific video sizes and lengths:
-* The 'number of video tokens' must be divisible by 128, see [video_token_num](https://github.com/woct0rdho/ComfyUI-RadialAttn/blob/14ed41e2ef754dfd0fb7d0ea4eea5ed2293edb55/nodes.py#L180) for details
-* For Wan 2.1 and 2.2 14B, this number is computed by `width/16 * height/16 * (length+3)/4`
-* For Wan 2.2 5B, this number is computed by `width/32 * height/32 * (length+3)/4`
-
-(A misunderstanding is that the width and the height must be divisible by 128, but that's actually not the case.)
-
-Don't blindly use `torch.compile`. To start with, you can disable the `TorchCompileModel` node and run the workflow. Only when you're sure that the workflow runs but it's not fast enough, then you can try to enable `TorchCompileModel`. There are reports that `torch.compile` is slower in PyTorch 2.8 .
+Don't blindly use `torch.compile`. To start with, you can disable the `TorchCompileModel` node and run the workflow. Only when you're sure that the workflow runs but it's not fast enough, then you can try to enable `TorchCompileModel`.
