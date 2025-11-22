@@ -47,29 +47,6 @@ def sparge_mask_convert(mask: torch.Tensor, block_size: int = 128, arch="sm") ->
     return new_mask
 
 
-def get_indptr_from_mask(mask, query):
-    # query shows the device of the indptr
-    # indptr (torch.Tensor) - the block index pointer of the block-sparse matrix on row dimension,
-    # shape `(MB + 1,)`, where `MB` is the number of blocks in the row dimension.
-    # The first element is always 0, and the last element is the number of blocks in the row dimension.
-    # The rest of the elements are the number of blocks in each row.
-    # the mask is already a block sparse mask
-    indptr = torch.zeros(mask.shape[0] + 1, device=query.device, dtype=torch.int32)
-    indptr[0] = 0
-    row_counts = mask.sum(dim=1).flatten()  # Ensure 1D output [num_blocks_row]
-    indptr[1:] = torch.cumsum(row_counts, dim=0)
-    return indptr
-
-
-def get_indices_from_mask(mask, query):
-    # indices (torch.Tensor) - the block indices of the block-sparse matrix on column dimension,
-    # shape `(nnz,),` where `nnz` is the number of non-zero blocks.
-    # The elements in `indices` array should be less than `NB`: the number of blocks in the column dimension.
-    nonzero_indices = torch.nonzero(mask)
-    indices = nonzero_indices[:, 1].to(dtype=torch.int32, device=query.device)
-    return indices
-
-
 def shrinkMaskStrict(mask, block_size=128):
     seqlen = mask.shape[0]
     block_num = seqlen // block_size
@@ -83,22 +60,6 @@ def shrinkMaskStrict(mask, block_size=128):
     block_mask[0:0] = True
     block_mask[-1:-1] = True
     return block_mask
-
-
-def pad_qkv(input_tensor, block_size=128):
-    """
-    Pad the input tensor to be a multiple of the block size.
-    input shape: (seqlen, num_heads, hidden_dim)
-    """
-    seqlen, num_heads, hidden_dim = input_tensor.shape
-    # Calculate the necessary padding
-    padding_length = (block_size - (seqlen % block_size)) % block_size
-    # Create a padded tensor with zeros
-    padded_tensor = torch.zeros((seqlen + padding_length, num_heads, hidden_dim), device=input_tensor.device, dtype=input_tensor.dtype)
-    # Copy the original tensor into the padded tensor
-    padded_tensor[:seqlen, :, :] = input_tensor
-
-    return padded_tensor
 
 
 def get_diagonal_split_mask(i, j, token_per_frame, sparse_type, device):
