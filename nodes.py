@@ -2,10 +2,15 @@ import functools
 from unittest.mock import patch
 
 import torch
-from comfy.ldm.modules.attention import wrap_attn
+from comfy.ldm.modules.attention import optimized_attention, wrap_attn
 
 from .attn_mask import MaskMap, RadialAttention
-from .patches import _original_functions, patched_forward
+
+_initialized = False
+_original_functions = {}
+if not _initialized:
+    _original_functions["orig_attention"] = optimized_attention
+    _initialized = True
 
 
 @functools.cache
@@ -22,8 +27,8 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
 
         if q.shape != k.shape:
             # This is cross attn. Fallback to the original attn.
-            orig_attention = _original_functions.get("orig_attention")
-            return orig_attention(q, k, v, heads)
+            orig_attention = _original_functions["orig_attention"]
+            return orig_attention(q, k, v, heads, **kwargs)
 
         # (batch_size, seq_len, num_heads * head_dim) -> (batch_size * seq_len, num_heads, head_dim)
         b, orig_seq_len, head_dim = q.shape
@@ -98,12 +103,6 @@ class PatchRadialAttn:
         ra_options["block_size"] = block_size
         ra_options["decay_factor"] = decay_factor
 
-        type_name = type(diffusion_model).__name__
-        if type_name in patched_forward:
-            context = patch.multiple(diffusion_model, forward_orig=patched_forward[type_name].__get__(diffusion_model, diffusion_model.__class__))
-        else:
-            raise TypeError(f"Unsupported model: {type_name}")
-
         def unet_wrapper_function(model_function, kwargs):
             input = kwargs["input"]
             timestep = kwargs["timestep"]
@@ -123,19 +122,29 @@ class PatchRadialAttn:
                     current_step_index = 0
 
             ra_options = c["transformer_options"]["radial_attn"]
-            patch_size = ra_options["patch_size"]
-            num_frame = (input.shape[2] - 1) // patch_size[0] + 1
-            frame_size = (input.shape[3] // patch_size[1]) * (input.shape[4] // patch_size[2])
-            video_token_num = frame_size * num_frame
-
-            padded_video_token_num = video_token_num
-            if video_token_num % block_size != 0:
-                padded_video_token_num = (video_token_num // block_size + 1) * block_size
-
-            ra_options["radial_attn_func"] = get_radial_attn_func(padded_video_token_num, num_frame, ra_options["block_size"], ra_options["decay_factor"])
 
             if ra_options["dense_timestep"] <= current_step_index < len(sigmas) - 1 - ra_options["last_dense_timestep"]:
-                with context:
+                patch_size = ra_options["patch_size"]
+                num_frame = (input.shape[2] - 1) // patch_size[0] + 1
+                frame_size = (input.shape[3] // patch_size[1]) * (input.shape[4] // patch_size[2])
+                video_token_num = frame_size * num_frame
+
+                padded_video_token_num = video_token_num
+                if video_token_num % block_size != 0:
+                    padded_video_token_num = (video_token_num // block_size + 1) * block_size
+
+                dense_block = ra_options["dense_block"]
+                radial_attn_func = get_radial_attn_func(padded_video_token_num, num_frame, ra_options["block_size"], ra_options["decay_factor"])
+
+                def maybe_radial_attn(*args, **kwargs):
+                    transformer_options = kwargs.get("transformer_options", {})
+                    block_index = transformer_options.get("block_index", -1)
+                    if block_index >= dense_block:
+                        return radial_attn_func(*args, **kwargs)
+                    else:
+                        return _original_functions["orig_attention"](*args, **kwargs)
+
+                with patch("comfy.ldm.wan.model.optimized_attention", new=maybe_radial_attn):
                     return model_function(input, timestep, **c)
             else:
                 # Do not apply radial attn
