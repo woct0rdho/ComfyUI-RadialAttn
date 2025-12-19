@@ -7,12 +7,13 @@ import torch
 from einops import rearrange, repeat
 from tqdm import tqdm
 
-# try to import block_sparse_sage2_attn_cuda from spas_sage_attn, if it fails, use the one from sparse_sageattn
 try:
     from spas_sage_attn import block_sparse_sage2_attn_cuda
 except ImportError:
-    print("Using sparse_sageattn as block_sparse_sage2_attn_cuda")
-    from sparse_sageattn import sparse_sageattn as block_sparse_sage2_attn_cuda
+    try:
+        from sparse_sageattn import sparse_sageattn as block_sparse_sage2_attn_cuda
+    except ImportError:
+        raise RuntimeError("Failed to import spas_sage_attn. Please install it following the instructions at https://github.com/woct0rdho/SpargeAttn")
 
 
 def get_cuda_arch_versions():
