@@ -60,8 +60,8 @@ def shrinkMaskStrict(mask, block_size=128):
     high_density_cols = col_densities > 1 / 3
     frac_high_density_cols = high_density_cols.sum(dim=-1) / (non_zero_densities.sum(dim=-1) + 1e-9)
     block_mask = frac_high_density_cols > 0.6
-    block_mask[0:0] = True
-    block_mask[-1:-1] = True
+    block_mask[0, 0] = True
+    block_mask[-1, -1] = True
     return block_mask
 
 
