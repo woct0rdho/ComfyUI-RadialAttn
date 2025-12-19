@@ -10,10 +10,9 @@ from .attn_mask import MaskMap, RadialAttention
 
 
 @functools.cache
-def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
+def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor, allow_compile):
     mask_map = MaskMap(video_token_num, num_frame)
 
-    @torch.compiler.disable()
     @wrap_attn
     def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False, **kwargs):
         if q.shape != k.shape:
@@ -60,6 +59,9 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
             out = out.reshape(b, -1, heads * head_dim)
         return out
 
+    if not allow_compile:
+        radial_attn_func = torch.compiler.disable()(radial_attn_func)
+
     return radial_attn_func
 
 
@@ -74,6 +76,7 @@ class PatchRadialAttn:
                 "last_dense_timestep": ("INT", {"default": 1, "min": 0, "max": 100, "step": 1, "tooltip": "Number of the last few time steps to disable radial attn."}),
                 "block_size": ([64, 128], {"default": 128}),
                 "decay_factor": ("FLOAT", {"default": 0.2, "min": 0.0, "max": 1.0, "step": 0.1, "tooltip": "Lower is faster, higher is more accurate."}),
+                "allow_compile": ("BOOLEAN", {"default": False, "tooltip": "Allow the use of torch.compile for the radial attn function."}),
             }
         }
 
@@ -81,7 +84,7 @@ class PatchRadialAttn:
     FUNCTION = "patch_radial_attn"
     CATEGORY = "RadialAttn"
 
-    def patch_radial_attn(self, model, dense_block, dense_timestep, last_dense_timestep, block_size, decay_factor):
+    def patch_radial_attn(self, model, dense_block, dense_timestep, last_dense_timestep, block_size, decay_factor, allow_compile):
         model = model.clone()
 
         diffusion_model = model.get_model_object("diffusion_model")
@@ -98,6 +101,7 @@ class PatchRadialAttn:
         ra_options["last_dense_timestep"] = last_dense_timestep
         ra_options["block_size"] = block_size
         ra_options["decay_factor"] = decay_factor
+        ra_options["allow_compile"] = allow_compile
 
         def unet_wrapper_function(model_function, kwargs):
             input = kwargs["input"]
@@ -126,11 +130,12 @@ class PatchRadialAttn:
                 video_token_num = frame_size * num_frame
 
                 padded_video_token_num = video_token_num
+                block_size = ra_options["block_size"]
                 if video_token_num % block_size != 0:
                     padded_video_token_num = (video_token_num // block_size + 1) * block_size
 
                 dense_block = ra_options["dense_block"]
-                radial_attn_func = get_radial_attn_func(padded_video_token_num, num_frame, ra_options["block_size"], ra_options["decay_factor"])
+                radial_attn_func = get_radial_attn_func(padded_video_token_num, num_frame, block_size, ra_options["decay_factor"], ra_options["allow_compile"])
 
                 def maybe_radial_attn(*args, **kwargs):
                     transformer_options = kwargs.get("transformer_options", {})
