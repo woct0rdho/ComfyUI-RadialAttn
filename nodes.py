@@ -20,20 +20,23 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
     @torch.compiler.disable()
     @wrap_attn
     def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False, **kwargs):
-        # attn_precision is unused
-        assert mask is None
-        assert skip_reshape is False
-        assert skip_output_reshape is False
-
         if q.shape != k.shape:
             # This is cross attn. Fallback to the original attn.
             orig_attention = _original_functions["orig_attention"]
-            return orig_attention(q, k, v, heads, **kwargs)
+            return orig_attention(q, k, v, heads, mask=mask, attn_precision=attn_precision, skip_reshape=skip_reshape, skip_output_reshape=skip_output_reshape, **kwargs)
 
-        # (batch_size, seq_len, num_heads * head_dim) -> (batch_size * seq_len, num_heads, head_dim)
-        b, orig_seq_len, head_dim = q.shape
-        head_dim //= heads
-        q, k, v = map(lambda t: t.view(-1, heads, head_dim), (q, k, v))
+        # attn_precision is unused
+        assert mask is None
+
+        if skip_reshape:
+            # (batch_size, num_heads, seq_len, head_dim) -> (batch_size * seq_len, num_heads, head_dim)
+            b, _, orig_seq_len, head_dim = q.shape
+            q, k, v = map(lambda t: t.permute(0, 2, 1, 3).reshape(-1, heads, head_dim), (q, k, v))
+        else:
+            # (batch_size, seq_len, num_heads * head_dim) -> (batch_size * seq_len, num_heads, head_dim)
+            b, orig_seq_len, head_dim = q.shape
+            head_dim //= heads
+            q, k, v = map(lambda t: t.view(-1, heads, head_dim), (q, k, v))
 
         padded_len = b * video_token_num
         if q.shape[0] != padded_len:
@@ -59,9 +62,12 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
 
         out = out[: b * orig_seq_len, :, :]
 
-        # (batch_size * seq_len, num_heads, head_dim) -> (batch_size, seq_len, num_heads * head_dim)
-        # Cannot use view because out may not be contiguous
-        out = out.reshape(b, -1, heads * head_dim)
+        if skip_output_reshape:
+            # (batch_size * seq_len, num_heads, head_dim) -> (batch_size, num_heads, seq_len, head_dim)
+            out = out.reshape(b, orig_seq_len, heads, head_dim).permute(0, 2, 1, 3)
+        else:
+            # (batch_size * seq_len, num_heads, head_dim) -> (batch_size, seq_len, num_heads * head_dim)
+            out = out.reshape(b, -1, heads * head_dim)
         return out
 
     return radial_attn_func
