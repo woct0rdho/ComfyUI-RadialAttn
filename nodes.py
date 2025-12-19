@@ -8,12 +8,6 @@ from comfy.ldm.modules.attention import optimized_attention, wrap_attn
 
 from .attn_mask import MaskMap, RadialAttention
 
-_initialized = False
-_original_functions = {}
-if not _initialized:
-    _original_functions["orig_attention"] = optimized_attention
-    _initialized = True
-
 
 @functools.cache
 def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
@@ -24,8 +18,7 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
     def radial_attn_func(q, k, v, heads, mask=None, attn_precision=None, skip_reshape=False, skip_output_reshape=False, **kwargs):
         if q.shape != k.shape:
             # This is cross attn. Fallback to the original attn.
-            orig_attention = _original_functions["orig_attention"]
-            return orig_attention(q, k, v, heads, mask=mask, attn_precision=attn_precision, skip_reshape=skip_reshape, skip_output_reshape=skip_output_reshape, **kwargs)
+            return optimized_attention(q, k, v, heads, mask=mask, attn_precision=attn_precision, skip_reshape=skip_reshape, skip_output_reshape=skip_output_reshape, **kwargs)
 
         # attn_precision is unused
         assert mask is None
@@ -145,7 +138,7 @@ class PatchRadialAttn:
                     if block_index >= dense_block:
                         return radial_attn_func(*args, **kwargs)
                     else:
-                        return _original_functions["orig_attention"](*args, **kwargs)
+                        return optimized_attention(*args, **kwargs)
 
                 with patch("comfy.ldm.wan.model.optimized_attention", new=maybe_radial_attn):
                     return model_function(input, timestep, **c)
