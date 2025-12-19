@@ -2,6 +2,8 @@ import functools
 from unittest.mock import patch
 
 import torch
+from torch.nn import functional as F
+
 from comfy.ldm.modules.attention import optimized_attention, wrap_attn
 
 from .attn_mask import MaskMap, RadialAttention
@@ -40,12 +42,7 @@ def get_radial_attn_func(video_token_num, num_frame, block_size, decay_factor):
 
         padded_len = b * video_token_num
         if q.shape[0] != padded_len:
-
-            def pad_tensor(tensor):
-                padding = torch.zeros(padded_len - tensor.shape[0], tensor.shape[1], tensor.shape[2], device=tensor.device, dtype=tensor.dtype)
-                return torch.cat([tensor, padding], dim=0)
-
-            q, k, v = map(pad_tensor, (q, k, v))
+            q, k, v = map(lambda t: F.pad(t, (0, 0, 0, 0, 0, padded_len - t.shape[0])), (q, k, v))
 
         out = RadialAttention(
             q,
